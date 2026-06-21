@@ -3,7 +3,7 @@ const db = require('../config/database');
 // Crear solicitud de préstamo (usuarios)
 exports.crearSolicitud = async (req, res) => {
     try {
-        const { herramienta_id, fecha_uso_estimada, fecha_devolucion_estimada, motivo } = req.body;
+        const { herramienta_id, fecha_uso_estimada, fecha_devolucion_estimada, motivo, cantidad } = req.body;
         const usuario_id = req.userId;
 
         // Validar campos
@@ -14,9 +14,9 @@ exports.crearSolicitud = async (req, res) => {
             });
         }
 
-        // Verificar que la herramienta existe
+        // Verificar que la herramienta existe y tiene stock disponible
         const [herramientas] = await db.query(
-            'SELECT id, nombre, estado FROM herramientas WHERE id = ?',
+            'SELECT id, nombre, estado, cantidad_disponible FROM herramientas WHERE id = ?',
             [herramienta_id]
         );
 
@@ -24,6 +24,17 @@ exports.crearSolicitud = async (req, res) => {
             return res.status(404).json({
                 success: false,
                 message: 'Herramienta no encontrada'
+            });
+        }
+
+        const herramienta = herramientas[0];
+        const cantidadA_Pedir = parseInt(cantidad, 10) || 1;
+
+        // Validar si hay unidades disponibles suficientes en inventario
+        if (herramienta.cantidad_disponible < cantidadA_Pedir || herramienta.estado === 'mantenimiento') {
+            return res.status(400).json({
+                success: false,
+                message: 'La herramienta no cuenta con el stock solicitado o está en mantenimiento'
             });
         }
 
@@ -41,12 +52,12 @@ exports.crearSolicitud = async (req, res) => {
             });
         }
 
-        // Crear solicitud
+        // Crear solicitud guardando la cantidad exacta elegida
         const [result] = await db.query(
             `INSERT INTO solicitudes 
-            (usuario_id, herramienta_id, fecha_uso_estimada, fecha_devolucion_estimada, motivo) 
-            VALUES (?, ?, ?, ?, ?)`,
-            [usuario_id, herramienta_id, fecha_uso_estimada, fecha_devolucion_estimada, motivo || null]
+            (usuario_id, herramienta_id, fecha_uso_estimada, fecha_devolucion_estimada, motivo, cantidad) 
+            VALUES (?, ?, ?, ?, ?, ?)`,
+            [usuario_id, herramienta_id, fecha_uso_estimada, fecha_devolucion_estimada, motivo || null, cantidadA_Pedir]
         );
 
         res.status(201).json({
@@ -64,7 +75,6 @@ exports.crearSolicitud = async (req, res) => {
     }
 };
 
-// Listar solicitudes del usuario actual
 // Listar solicitudes del usuario actual
 exports.misSolicitudes = async (req, res) => {
     try {
@@ -100,12 +110,13 @@ exports.misSolicitudes = async (req, res) => {
 // Listar todas las solicitudes (admin)
 exports.listarSolicitudes = async (req, res) => {
     try {
-        const { estado } = req.query; // Filtro opcional por estado
+        const { estado } = req.query;
 
         let query = `
             SELECT s.*, 
                    u.nombre as usuario_nombre, u.email as usuario_email, u.telefono as usuario_telefono,
                    h.nombre as herramienta_nombre, h.codigo_qr, h.estado as herramienta_estado,
+                   h.cantidad_disponible, h.cantidad_total,
                    ar.nombre as admin_revisor_nombre
             FROM solicitudes s
             INNER JOIN usuarios u ON s.usuario_id = u.id
@@ -114,7 +125,6 @@ exports.listarSolicitudes = async (req, res) => {
         `;
 
         const params = [];
-
         if (estado) {
             query += ' WHERE s.estado = ?';
             params.push(estado);
@@ -138,7 +148,7 @@ exports.listarSolicitudes = async (req, res) => {
     }
 };
 
-// Aprobar solicitud (admin)
+// Aprobar solicitud (admin) - CANTIDADES CORREGIDAS Y SIN ERRORES DE SINTAXIS
 exports.aprobarSolicitud = async (req, res) => {
     const connection = await db.getConnection();
 
@@ -149,7 +159,7 @@ exports.aprobarSolicitud = async (req, res) => {
 
         await connection.beginTransaction();
 
-        // Verificar que la solicitud existe y está pendiente
+        // 1. Verificar que la solicitud existe
         const [solicitudes] = await connection.query(
             'SELECT * FROM solicitudes WHERE id = ?',
             [id]
@@ -164,6 +174,8 @@ exports.aprobarSolicitud = async (req, res) => {
         }
 
         const solicitud = solicitudes[0];
+        // Restamos el número exacto solicitado (si no está definido aún en la BD, toma 1)
+        const cantidadSolicitada = parseInt(solicitud.cantidad, 10) || 1;
 
         if (solicitud.estado !== 'pendiente') {
             await connection.rollback();
@@ -173,21 +185,32 @@ exports.aprobarSolicitud = async (req, res) => {
             });
         }
 
-        // Verificar que la herramienta está disponible
+        // 2. Verificar stock de la herramienta en tiempo real
         const [herramientas] = await connection.query(
-            'SELECT estado FROM herramientas WHERE id = ?',
+            'SELECT cantidad_disponible, estado FROM herramientas WHERE id = ? FOR UPDATE',
             [solicitud.herramienta_id]
         );
 
-        if (herramientas[0].estado !== 'disponible') {
+        if (herramientas.length === 0) {
             await connection.rollback();
-            return res.status(400).json({
+            return res.status(404).json({
                 success: false,
-                message: 'La herramienta ya no está disponible'
+                message: 'La herramienta ya no existe en el sistema'
             });
         }
 
-        // Actualizar solicitud a aprobada
+        const herramienta = herramientas[0];
+        const cantidadActual = parseInt(herramienta.cantidad_disponible, 10) || 0;
+
+        if (cantidadActual < cantidadSolicitada) {
+            await connection.rollback();
+            return res.status(400).json({
+                success: false,
+                message: `No hay suficiente stock. Solicitado: ${cantidadSolicitada}, Disponible: ${cantidadActual}`
+            });
+        }
+
+        // 3. Actualizar solicitud a aprobada
         await connection.query(
             `UPDATE solicitudes 
              SET estado = 'aprobada', admin_revisor_id = ?, fecha_revision = NOW(), comentario_admin = ?
@@ -195,11 +218,11 @@ exports.aprobarSolicitud = async (req, res) => {
             [admin_id, comentario_admin || null, id]
         );
 
-        // Crear el préstamo
+        // 4. Crear el registro en la tabla de prestamos
         const [prestamo] = await connection.query(
             `INSERT INTO prestamos 
-            (solicitud_id, usuario_id, herramienta_id, admin_aprobador_id, fecha_prestamo, fecha_aprobacion, fecha_devolucion_estimada, observaciones) 
-            VALUES (?, ?, ?, ?, ?, NOW(), ?, ?)`,
+    (solicitud_id, usuario_id, herramienta_id, admin_aprobador_id, fecha_prestamo, fecha_aprobacion, fecha_devolucion_estimada, observaciones, cantidad_prestada) 
+    VALUES (?, ?, ?, ?, ?, NOW(), ?, ?, ?)`,
             [
                 id,
                 solicitud.usuario_id,
@@ -207,21 +230,25 @@ exports.aprobarSolicitud = async (req, res) => {
                 admin_id,
                 solicitud.fecha_uso_estimada,
                 solicitud.fecha_devolucion_estimada,
-                `Aprobado por admin. ${comentario_admin || ''}`
+                `Aprobado por admin. ${comentario_admin || ''}`,
+                cantidadSolicitada
             ]
         );
 
-        // Actualizar estado de la herramienta
+        // 5. Restar la cantidad correspondiente
+        const nuevaCantidadDisponible = cantidadActual - cantidadSolicitada;
+        const nuevoEstado = nuevaCantidadDisponible <= 0 ? 'prestado' : 'disponible';
+
         await connection.query(
-            'UPDATE herramientas SET estado = "prestado" WHERE id = ?',
-            [solicitud.herramienta_id]
+            'UPDATE herramientas SET cantidad_disponible = ?, estado = ? WHERE id = ?',
+            [nuevaCantidadDisponible, nuevoEstado, solicitud.herramienta_id]
         );
 
-        // Registrar en historial
+        // 6. Registrar en historial de auditoría
         await connection.query(
             `INSERT INTO historial (usuario_id, accion, entidad_tipo, entidad_id, detalles)
              VALUES (?, 'aprobar_solicitud', 'solicitud', ?, ?)`,
-            [admin_id, id, `Solicitud aprobada. Préstamo ID: ${prestamo.insertId}`]
+            [admin_id, id, `Solicitud aprobada. Préstamo ID: ${prestamo.insertId}. Unidades prestadas: ${cantidadSolicitada}. Restantes: ${nuevaCantidadDisponible}`]
         );
 
         await connection.commit();
@@ -251,7 +278,6 @@ exports.rechazarSolicitud = async (req, res) => {
         const { comentario_admin } = req.body;
         const admin_id = req.userId;
 
-        // Verificar que la solicitud existe y está pendiente
         const [solicitudes] = await db.query(
             'SELECT estado FROM solicitudes WHERE id = ?',
             [id]
@@ -271,7 +297,6 @@ exports.rechazarSolicitud = async (req, res) => {
             });
         }
 
-        // Actualizar solicitud a rechazada
         await db.query(
             `UPDATE solicitudes 
              SET estado = 'rechazada', admin_revisor_id = ?, fecha_revision = NOW(), comentario_admin = ?
@@ -279,7 +304,6 @@ exports.rechazarSolicitud = async (req, res) => {
             [admin_id, comentario_admin || 'Solicitud rechazada', id]
         );
 
-        // Registrar en historial
         await db.query(
             `INSERT INTO historial (usuario_id, accion, entidad_tipo, entidad_id, detalles)
              VALUES (?, 'rechazar_solicitud', 'solicitud', ?, ?)`,
@@ -306,7 +330,6 @@ exports.cancelarSolicitud = async (req, res) => {
         const { id } = req.params;
         const usuario_id = req.userId;
 
-        // Verificar que la solicitud existe, pertenece al usuario y está pendiente
         const [solicitudes] = await db.query(
             'SELECT estado, usuario_id FROM solicitudes WHERE id = ?',
             [id]
@@ -331,11 +354,10 @@ exports.cancelarSolicitud = async (req, res) => {
         if (solicitud.estado !== 'pendiente') {
             return res.status(400).json({
                 success: false,
-                message: `No puedes cancelar una solicitud ${solicitud.estado}`
+                message: `No puedes cancelar una solicitud que ya está ${solicitud.estado}`
             });
         }
 
-        // Cancelar solicitud
         await db.query(
             `UPDATE solicitudes SET estado = 'cancelada' WHERE id = ?`,
             [id]
@@ -343,7 +365,7 @@ exports.cancelarSolicitud = async (req, res) => {
 
         res.json({
             success: true,
-            message: 'Solicitud cancelada'
+            message: 'Solicitud cancelada correctamente'
         });
 
     } catch (error) {

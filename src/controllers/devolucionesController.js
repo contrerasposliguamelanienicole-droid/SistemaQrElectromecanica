@@ -3,7 +3,7 @@ const db = require('../config/database');
 // Crear solicitud de devolución (usuario)
 exports.crearDevolucion = async (req, res) => {
     const connection = await db.getConnection();
-    
+
     try {
         const { prestamo_id, herramienta_id, estado_herramienta, observaciones_usuario } = req.body;
         const usuario_id = req.userId;
@@ -124,7 +124,7 @@ exports.misDevoluciones = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error obteniendo mis devoluciones:', error);
+        console.error('Error obtener mis devoluciones:', error);
         res.status(500).json({
             success: false,
             message: 'Error en el servidor'
@@ -218,6 +218,46 @@ exports.aprobarDevolucion = async (req, res) => {
             });
         }
 
+        // OBTENER LA CANTIDAD REAL PRESTADA DESDE EL PRÉSTAMO ORIGINAL
+        const [prestamosInfo] = await connection.query(
+            'SELECT cantidad_prestada FROM prestamos WHERE id = ?',
+            [devolucion.prestamo_id]
+        );
+
+        if (prestamosInfo.length === 0) {
+            await connection.rollback();
+            return res.status(404).json({
+                success: false,
+                message: 'El préstamo asociado a esta devolución ya no existe'
+            });
+        }
+
+        const cantidadPrestada = parseInt(prestamosInfo[0].cantidad_prestada, 10) || 1;
+
+        // OBTENER LA HERRAMIENTA EN TIEMPO REAL PARA ACTUALIZAR SU STOCK
+        const [herramientas] = await connection.query(
+            'SELECT cantidad_disponible FROM herramientas WHERE id = ? FOR UPDATE',
+            [devolucion.herramienta_id]
+        );
+
+        if (herramientas.length === 0) {
+            await connection.rollback();
+            return res.status(404).json({
+                success: false,
+                message: 'La herramienta asociada ya no existe en el sistema'
+            });
+        }
+
+        const herramienta = herramientas[0];
+        const cantidadActual = parseInt(herramienta.cantidad_disponible, 10) || 0;
+
+        // El stock solo aumenta si la herramienta vuelve a estar apta ('disponible')
+        // Se suma la cantidad EXACTA que se había prestado, no un valor fijo
+        let nuevaCantidadDisponible = cantidadActual;
+        if (nuevo_estado_herramienta === 'disponible') {
+            nuevaCantidadDisponible = cantidadActual + cantidadPrestada;
+        }
+
         // Actualizar la devolución
         await connection.query(
             `UPDATE devoluciones 
@@ -238,17 +278,17 @@ exports.aprobarDevolucion = async (req, res) => {
             [devolucion.prestamo_id]
         );
 
-        // Actualizar el estado de la herramienta
+        // Actualizar el estado Y la cantidad disponible de la herramienta
         await connection.query(
-            'UPDATE herramientas SET estado = ? WHERE id = ?',
-            [nuevo_estado_herramienta, devolucion.herramienta_id]
+            'UPDATE herramientas SET cantidad_disponible = ?, estado = ? WHERE id = ?',
+            [nuevaCantidadDisponible, nuevo_estado_herramienta, devolucion.herramienta_id]
         );
 
         // Registrar en historial
         await connection.query(
             `INSERT INTO historial (usuario_id, accion, entidad_tipo, entidad_id, detalles)
              VALUES (?, 'aprobar_devolucion', 'devolucion', ?, ?)`,
-            [admin_id, id, `Devolución aprobada. Estado herramienta: ${nuevo_estado_herramienta}`]
+            [admin_id, id, `Devolución aprobada. Estado herramienta: ${nuevo_estado_herramienta}. Stock actual: ${nuevaCantidadDisponible}`]
         );
 
         await connection.commit();
