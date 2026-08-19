@@ -335,27 +335,21 @@ exports.requestPasswordReset = async (req, res) => {
             [resetCode, expiresAt, user.id]
         );
 
-        try {
-            const emailService = require('../services/emailService');
-            await emailService.sendPasswordResetCode(user.email, user.nombre, resetCode);
-            
-            console.log(`Código enviado a: ${user.email}`);
+                // Responder de inmediato, sin esperar a que Gmail termine de enviar
+        res.json({
+            success: true,
+            message: `Código enviado a ${user.email}. Revisa tu bandeja de entrada.`,
+            email: user.email
+        });
 
-            return res.json({
-                success: true,
-                message: `Código enviado a ${user.email}. Revisa tu bandeja de entrada.`,
-                email: user.email
+        // Enviar el correo en segundo plano (no bloquea la respuesta)
+        const emailService = require('../services/emailService');
+        emailService.sendPasswordResetCode(user.email, user.nombre, resetCode)
+            .then(() => console.log(`Código enviado a: ${user.email}`))
+            .catch(emailError => {
+                console.error('Error enviando email:', emailError);
+                console.log(`CÓDIGO DE DESARROLLO: ${resetCode}`);
             });
-        } catch (emailError) {
-            console.error('Error enviando email:', emailError);
-            console.log(`CÓDIGO DE DESARROLLO: ${resetCode}`);
-            
-            return res.json({
-                success: true,
-                message: 'Código generado (revisa la consola del servidor)',
-                devCode: resetCode
-            });
-        }
     } catch (error) {
         console.error('Error solicitando recuperación:', error);
         res.status(500).json({
