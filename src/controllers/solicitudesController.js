@@ -376,3 +376,37 @@ exports.cancelarSolicitud = async (req, res) => {
         });
     }
 };
+
+exports.misSolicitudes = async (req, res) => {
+    try {
+        const [solicitudes] = await db.query(`
+            SELECT s.*, 
+                   h.descripcion as herramienta_nombre, 
+                   h.codigo_qr, 
+                   h.imagen_url,
+                   c.nombre as categoria_nombre,
+                   ar.nombre as admin_revisor_nombre,
+                   p.id as prestamo_id,
+                   p.estado as prestamo_estado
+            FROM solicitudes s
+            INNER JOIN herramientas h ON s.herramienta_id = h.id
+            LEFT JOIN categorias c ON h.categoria_id = c.id
+            LEFT JOIN usuarios ar ON s.admin_revisor_id = ar.id
+            LEFT JOIN prestamos p ON p.solicitud_id = s.id
+            WHERE s.usuario_id = ?
+            ORDER BY s.created_at DESC
+        `, [req.userId]);
+
+        res.json({
+            success: true,
+            solicitudes
+        });
+
+    } catch (error) {
+        console.error('Error obteniendo mis solicitudes:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error en el servidor'
+        });
+    }
+};
