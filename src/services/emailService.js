@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const dns = require('dns');
 
 // Configurar transporter
 const transporter = nodemailer.createTransport({
@@ -6,7 +7,9 @@ const transporter = nodemailer.createTransport({
     port: process.env.EMAIL_PORT,
     secure: false,
     requireTLS: true,
-    family: 4, 
+    lookup: (hostname, options, callback) => {
+        dns.lookup(hostname, { family: 4 }, callback);
+    },
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASSWORD,
