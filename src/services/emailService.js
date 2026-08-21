@@ -92,7 +92,7 @@ async function sendPasswordResetCode(email, nombre, codigo) {
                     </div>
                     <div class="content">
                         <p>Hola <strong>${nombre}</strong>,</p>
-                        <p>Recibimos una solicitud para restablecer la contraseña de tu cuenta en el Sistema de Alimentos.</p>
+                        <p>Recibimos una solicitud para restablecer la contraseña de tu cuenta en el Sistema de Electromecanica.</p>
                         
                         <div class="code-box">
                             <p style="margin: 0; color: #666; font-size: 14px;">Tu código de verificación es:</p>
@@ -112,7 +112,7 @@ async function sendPasswordResetCode(email, nombre, codigo) {
                     </div>
                     <div class="footer">
                         <p>Este es un mensaje automático, por favor no respondas a este correo.</p>
-                        <p>&copy; ${new Date().getFullYear()} Sistema de Alimentos. Todos los derechos reservados.</p>
+                        <p>&copy; ${new Date().getFullYear()} Sistema de Electromecanica. Todos los derechos reservados.</p>
                     </div>
                 </div>
             </body>
