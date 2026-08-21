@@ -1,15 +1,10 @@
 const nodemailer = require('nodemailer');
-const dns = require('dns');
 
 // Configurar transporter
 const transporter = nodemailer.createTransport({
     host: process.env.EMAIL_HOST,
     port: process.env.EMAIL_PORT,
     secure: false,
-    requireTLS: true,
-    lookup: (hostname, options, callback) => {
-        dns.lookup(hostname, { family: 4 }, callback);
-    },
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASSWORD,
@@ -97,7 +92,7 @@ async function sendPasswordResetCode(email, nombre, codigo) {
                     </div>
                     <div class="content">
                         <p>Hola <strong>${nombre}</strong>,</p>
-                        <p>Recibimos una solicitud para restablecer la contraseña de tu cuenta en el Sistema de electromecanica.</p>
+                        <p>Recibimos una solicitud para restablecer la contraseña de tu cuenta en el Sistema de Alimentos.</p>
                         
                         <div class="code-box">
                             <p style="margin: 0; color: #666; font-size: 14px;">Tu código de verificación es:</p>
@@ -117,7 +112,7 @@ async function sendPasswordResetCode(email, nombre, codigo) {
                     </div>
                     <div class="footer">
                         <p>Este es un mensaje automático, por favor no respondas a este correo.</p>
-                        <p>&copy; ${new Date().getFullYear()} Sistema de electromecanica. Todos los derechos reservados.</p>
+                        <p>&copy; ${new Date().getFullYear()} Sistema de Alimentos. Todos los derechos reservados.</p>
                     </div>
                 </div>
             </body>
